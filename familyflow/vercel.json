@@ -1,6 +1,6 @@
 {
   "routes": [
     { "handle": "filesystem" },
-    { "src": "familyflow", "dest": "/index.html" }
+    { "src": "/.*", "dest": "/index.html" }
   ]
 }
