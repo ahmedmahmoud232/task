@@ -33,8 +33,13 @@ import {
   Stethoscope,
   Pill,
   ShoppingBag,
-  MoreHorizontal
+  MoreHorizontal,
+  Sparkles,
+  Wand2,
+  BrainCircuit
 } from 'lucide-react';
+
+import { GoogleGenAI, Type } from "@google/genai";
 
 // --- Types ---
 
@@ -170,6 +175,18 @@ const TRANSLATIONS = {
     stop: 'Stop',
     recorded: 'Recorded',
     photoAdded: 'Photo Added',
+    aiManager: 'AI Time Manager',
+    aiOptimize: 'Optimize Schedule',
+    aiThinking: 'AI is thinking...',
+    aiSuggestion: 'AI Suggestion',
+    aiClose: 'Close',
+    aiApply: 'Apply Suggestions',
+    aiNoTasks: 'Add some tasks first so I can help you manage your time!',
+    aiSmartBreakdown: 'Smart Breakdown',
+    aiBreakdownThinking: 'Breaking down task...',
+    aiBreakdownTitle: 'Suggested Sub-tasks',
+    aiAddSelected: 'Add Selected Tasks',
+    aiSelectChild: 'Select Child',
   },
   ar: {
     appName: 'فاميلي فلو',
@@ -243,6 +260,18 @@ const TRANSLATIONS = {
     stop: 'إيقاف',
     recorded: 'تم التسجيل',
     photoAdded: 'تم إضافة صورة',
+    aiManager: 'مدير الوقت الذكي',
+    aiOptimize: 'تحسين الجدول',
+    aiThinking: 'الذكاء الاصطناعي يفكر...',
+    aiSuggestion: 'اقتراح الذكاء الاصطناعي',
+    aiClose: 'إغلاق',
+    aiApply: 'تطبيق الاقتراحات',
+    aiNoTasks: 'أضف بعض المهام أولاً حتى أتمكن من مساعدتك في إدارة وقتك!',
+    aiSmartBreakdown: 'تقسيم ذكي',
+    aiBreakdownThinking: 'جاري تقسيم المهمة...',
+    aiBreakdownTitle: 'المهام الفرعية المقترحة',
+    aiAddSelected: 'إضافة المهام المختارة',
+    aiSelectChild: 'اختر الطفل',
   }
 };
 
@@ -274,6 +303,11 @@ export default function App() {
   const [selectedTask, setSelectedTask] = useState<ParentTask | null>(null);
   const [isAddingChild, setIsAddingChild] = useState(false);
   const [isAssigningTask, setIsAssigningTask] = useState<string | null>(null); // Child ID
+  const [isAiLoading, setIsAiLoading] = useState(false);
+  const [aiSuggestion, setAiSuggestion] = useState<string | null>(null);
+  const [showAiModal, setShowAiModal] = useState(false);
+  const [aiBreakdownTasks, setAiBreakdownTasks] = useState<{title: string, startTime: string, endTime: string}[]>([]);
+  const [isBreakdownLoading, setIsBreakdownLoading] = useState(false);
   
   // Audio Recording State
   const [isRecording, setIsRecording] = useState(false);
@@ -390,6 +424,14 @@ export default function App() {
     setSelectedImageUrl(null);
   };
 
+  const closeSelectedTask = () => {
+    setSelectedTask(null);
+    setAiBreakdownTasks([]);
+    setRecordedAudioUrl(null);
+    setSelectedImageUrl(null);
+    if (isRecording) stopRecording();
+  };
+
   const handleUpdateParentTask = (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
     if (!selectedTask) return;
@@ -412,9 +454,98 @@ export default function App() {
     };
 
     setParentTasks(parentTasks.map(t => t.id === selectedTask.id ? updatedTask : t));
-    setSelectedTask(null);
-    setRecordedAudioUrl(null);
-    setSelectedImageUrl(null);
+    closeSelectedTask();
+  };
+
+  const handleAiOptimize = async () => {
+    if (parentTasks.length === 0 && childTasks.length === 0) {
+      alert(t('aiNoTasks'));
+      return;
+    }
+
+    setIsAiLoading(true);
+    setShowAiModal(true);
+
+    try {
+      const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY! });
+      const model = "gemini-3-flash-preview";
+      
+      const prompt = `
+        You are an expert family time manager. 
+        Analyze the following tasks and provide 3-5 concise, actionable suggestions to make the family schedule more efficient.
+        Focus on:
+        1. Task grouping (e.g., doing all errands at once).
+        2. Priority adjustments based on task types.
+        3. Better timing for child tasks.
+        
+        Language: ${language === 'ar' ? 'Arabic' : 'English'}.
+        
+        Parent Tasks: ${JSON.stringify(parentTasks.map(t => ({ title: t.title, type: t.type, priority: t.priority })))}
+        Child Tasks: ${JSON.stringify(childTasks.map(t => ({ title: t.title, start: t.startTime, end: t.endTime })))}
+      `;
+
+      const response = await ai.models.generateContent({
+        model,
+        contents: [{ parts: [{ text: prompt }] }],
+      });
+
+      setAiSuggestion(response.text || "No suggestions found.");
+    } catch (error) {
+      console.error("AI Error:", error);
+      setAiSuggestion("Sorry, I encountered an error while thinking. Please try again.");
+    } finally {
+      setIsAiLoading(false);
+    }
+  };
+
+  const handleAiBreakdown = async (task: ParentTask) => {
+    setIsBreakdownLoading(true);
+    setAiBreakdownTasks([]);
+
+    try {
+      const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY! });
+      const model = "gemini-3-flash-preview";
+      
+      const prompt = `
+        You are an expert family organizer. 
+        Break down the following parent task into 3-5 specific, small, and actionable child tasks.
+        Each sub-task should have a title, a suggested start time, and a suggested end time (in HH:MM format).
+        Return the result as a JSON array of objects with keys: title, startTime, endTime.
+        
+        Language: ${language === 'ar' ? 'Arabic' : 'English'}.
+        
+        Parent Task: ${task.title}
+        Description: ${task.description}
+      `;
+
+      const response = await ai.models.generateContent({
+        model,
+        contents: [{ parts: [{ text: prompt }] }],
+        config: {
+          responseMimeType: "application/json",
+          responseSchema: {
+            type: Type.ARRAY,
+            items: {
+              type: Type.OBJECT,
+              properties: {
+                title: { type: Type.STRING },
+                startTime: { type: Type.STRING },
+                endTime: { type: Type.STRING },
+              },
+              required: ["title", "startTime", "endTime"],
+            },
+          },
+        },
+      });
+
+      const suggestions = JSON.parse(response.text || "[]");
+      setAiBreakdownTasks(suggestions);
+    } catch (error) {
+      console.error("AI Breakdown Error:", error);
+      alert("Failed to generate sub-tasks. Please try again.");
+    } finally {
+      setIsBreakdownLoading(false);
+    }
   };
 
   const handleAssignChildTask = (e: React.FormEvent<HTMLFormElement>) => {
@@ -492,6 +623,13 @@ export default function App() {
               <Filter size={14} />
             </div>
           </div>
+          <button 
+            onClick={handleAiOptimize}
+            className="bg-amber-100 text-amber-600 p-3 rounded-2xl shadow-lg hover:scale-95 transition-transform flex items-center gap-2"
+            title={t('aiOptimize')}
+          >
+            <Sparkles size={24} />
+          </button>
           <button 
             onClick={() => setIsAddingTask(true)}
             className="bg-black text-white p-3 rounded-2xl shadow-lg hover:scale-95 transition-transform"
@@ -952,7 +1090,7 @@ export default function App() {
               initial={{ opacity: 0 }} 
               animate={{ opacity: 1 }} 
               exit={{ opacity: 0 }}
-              onClick={() => setSelectedTask(null)}
+              onClick={closeSelectedTask}
               className="absolute inset-0 bg-black/40 backdrop-blur-sm"
             />
             <motion.div 
@@ -964,7 +1102,7 @@ export default function App() {
               <form onSubmit={handleUpdateParentTask} className="p-8 space-y-6 max-h-[85vh] overflow-y-auto no-scrollbar">
                 <div className="flex items-center justify-between mb-2">
                   <h2 className="text-2xl font-serif font-bold">{t('editTask')}</h2>
-                  <button type="button" onClick={() => setSelectedTask(null)} className="text-black/20 hover:text-black transition-colors">
+                  <button type="button" onClick={closeSelectedTask} className="text-black/20 hover:text-black transition-colors">
                     <ChevronLeft size={32} className={isRtl ? 'rotate-180' : ''} />
                   </button>
                 </div>
@@ -979,6 +1117,85 @@ export default function App() {
                     <label className="text-[10px] uppercase font-bold tracking-widest text-black/40">{t('description')}</label>
                     <textarea name="description" defaultValue={selectedTask.description} className="w-full bg-black/5 border-none rounded-2xl px-5 py-4 h-24 focus:ring-2 focus:ring-black/5" />
                   </div>
+
+                  {/* AI Smart Breakdown Button */}
+                  <div className="pt-2">
+                    <button
+                      type="button"
+                      onClick={() => handleAiBreakdown(selectedTask)}
+                      disabled={isBreakdownLoading}
+                      className="w-full flex items-center justify-center gap-2 py-3 bg-amber-50 text-amber-600 border border-amber-100 rounded-2xl font-bold text-sm hover:bg-amber-100 transition-colors disabled:opacity-50"
+                    >
+                      {isBreakdownLoading ? (
+                        <>
+                          <div className="w-4 h-4 border-2 border-amber-200 border-t-amber-600 rounded-full animate-spin" />
+                          <span>{t('aiBreakdownThinking')}</span>
+                        </>
+                      ) : (
+                        <>
+                          <Wand2 size={18} />
+                          <span>{t('aiSmartBreakdown')}</span>
+                        </>
+                      )}
+                    </button>
+                  </div>
+
+                  {/* AI Breakdown Results */}
+                  <AnimatePresence>
+                    {aiBreakdownTasks.length > 0 && (
+                      <motion.div
+                        initial={{ opacity: 0, height: 0 }}
+                        animate={{ opacity: 1, height: 'auto' }}
+                        exit={{ opacity: 0, height: 0 }}
+                        className="space-y-3 pt-2"
+                      >
+                        <div className="flex items-center justify-between">
+                          <label className="text-[10px] uppercase font-bold tracking-widest text-black/40">{t('aiBreakdownTitle')}</label>
+                          <button 
+                            type="button" 
+                            onClick={() => setAiBreakdownTasks([])}
+                            className="text-[10px] uppercase font-bold text-red-500"
+                          >
+                            {t('aiClose')}
+                          </button>
+                        </div>
+                        <div className="space-y-2">
+                          {aiBreakdownTasks.map((task, idx) => (
+                            <div key={idx} className="flex items-center justify-between p-3 bg-amber-50/50 border border-amber-100/50 rounded-2xl text-sm">
+                              <div className="flex flex-col">
+                                <span className="font-medium text-amber-900">{task.title}</span>
+                                <span className="text-[10px] text-amber-600/60">{task.startTime} - {task.endTime}</span>
+                              </div>
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  if (!selectedTask.childId) {
+                                    alert(t('aiSelectChild'));
+                                    return;
+                                  }
+                                  const newTask: ChildTask = {
+                                    id: crypto.randomUUID(),
+                                    childId: selectedTask.childId,
+                                    title: task.title,
+                                    startTime: task.startTime,
+                                    endTime: task.endTime,
+                                    points: 10,
+                                    reminder: false,
+                                    completed: false,
+                                  };
+                                  setChildTasks([newTask, ...childTasks]);
+                                  setAiBreakdownTasks(prev => prev.filter((_, i) => i !== idx));
+                                }}
+                                className="p-2 bg-amber-100 text-amber-600 rounded-xl hover:bg-amber-200 transition-colors"
+                              >
+                                <Plus size={16} />
+                              </button>
+                            </div>
+                          ))}
+                        </div>
+                      </motion.div>
+                    )}
+                  </AnimatePresence>
 
                   <div className="grid grid-cols-2 gap-4">
                     <div className="space-y-1">
@@ -1177,6 +1394,67 @@ export default function App() {
                   {t('assignTask')}
                 </button>
               </form>
+            </motion.div>
+          </div>
+        )}
+
+        {showAiModal && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-6">
+            <motion.div 
+              initial={{ opacity: 0 }} 
+              animate={{ opacity: 1 }} 
+              exit={{ opacity: 0 }}
+              onClick={() => !isAiLoading && setShowAiModal(false)}
+              className="absolute inset-0 bg-black/40 backdrop-blur-sm"
+            />
+            <motion.div 
+              initial={{ scale: 0.9, opacity: 0 }} 
+              animate={{ scale: 1, opacity: 1 }} 
+              exit={{ scale: 0.9, opacity: 0 }}
+              className="relative w-full max-w-lg bg-white rounded-[3rem] shadow-2xl overflow-hidden p-8"
+            >
+              <div className="flex items-center gap-4 mb-6">
+                <div className="w-12 h-12 bg-amber-100 text-amber-600 rounded-2xl flex items-center justify-center">
+                  <BrainCircuit size={24} />
+                </div>
+                <div>
+                  <h2 className="text-xl font-serif font-bold">{t('aiManager')}</h2>
+                  <p className="text-[10px] uppercase tracking-widest text-black/40 font-bold">{t('aiSuggestion')}</p>
+                </div>
+              </div>
+
+              <div className="min-h-[200px] flex flex-col justify-center">
+                {isAiLoading ? (
+                  <div className="flex flex-col items-center gap-4 py-10">
+                    <div className="w-12 h-12 border-4 border-amber-100 border-t-amber-500 rounded-full animate-spin" />
+                    <p className="text-sm font-medium text-black/40 animate-pulse">{t('aiThinking')}</p>
+                  </div>
+                ) : (
+                  <div className="prose prose-sm max-w-none">
+                    <div className="bg-amber-50/50 p-6 rounded-3xl border border-amber-100/50 text-amber-900/80 leading-relaxed whitespace-pre-wrap italic">
+                      {aiSuggestion}
+                    </div>
+                  </div>
+                )}
+              </div>
+
+              <div className="mt-8 flex gap-3">
+                <button 
+                  onClick={() => setShowAiModal(false)}
+                  disabled={isAiLoading}
+                  className="flex-1 py-4 bg-black/5 text-black font-bold rounded-2xl hover:bg-black/10 transition-colors disabled:opacity-50"
+                >
+                  {t('aiClose')}
+                </button>
+                {!isAiLoading && (
+                  <button 
+                    onClick={() => setShowAiModal(false)}
+                    className="flex-1 py-4 bg-black text-white font-bold rounded-2xl shadow-xl hover:scale-95 transition-transform"
+                  >
+                    {t('aiApply')}
+                  </button>
+                )}
+              </div>
             </motion.div>
           </div>
         )}
