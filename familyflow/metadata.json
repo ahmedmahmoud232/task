@@ -1,0 +1,5 @@
+{
+  "name": "FamilyFlow",
+  "description": "A comprehensive task management system for parents to track family duties and assign rewarding tasks to children.",
+  "requestFramePermissions": ["camera", "microphone"]
+}
